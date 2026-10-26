@@ -2,10 +2,10 @@
 
 | Member | Main responsibilities | Experiments/report sections | Agreed contribution % |
 |---|---|---|---:|
-| Member 1 |  |  |  |
-| Member 2 |  |  |  |
-| Member 3 |  |  |  |
-| Member 4 |  |  |  |
+| Ong Jun Yi |  |  | 25%  |
+| Julian Lim |  |  | 25% |
+| Xia Wen Hao |  |  | 25% |
+| Member 4 |  |  | 25% |
 
 Total contribution should be 100%.
 
