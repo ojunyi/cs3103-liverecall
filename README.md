@@ -81,7 +81,7 @@ Assign one owner per row (initials) so two people do not edit the same function 
 | 3 | What did I miss? | Client keeps at least 60 s of finals locally; button shows 30 s by default, with 15/30/60 s options; uses local data, no server request in normal operation | C | JY |
 | 4 | Automatic reconnect | Client reconnects by itself and shows its connection state | C | |
 | 5 | Incremental recovery | After a short disconnect, only the missed finals come back (using `last_segment`/`last_revision`), not the whole lecture | S, C | JY |
-| 6 | Late join | New client (`last_segment=0`) gets recent context via `HISTORY`, then live updates | S, C | |
+| 6 | Late join | New client (`last_segment=0`) gets recent context via `HISTORY`, then live updates | S, C | JY |
 | 7 | No duplicate finals | A final is never shown twice after reconnect or recovery (watch the gap between sending `HISTORY` and registering for live updates) | S, C | |
 | 8 | Bounded history | Server keeps at least 60 s of finals but never an unbounded transcript or unbounded per-client backlog | S | JY |
 | 9 | Concurrent clients | Many simultaneous clients (public tests use 100; the hidden test is larger); the source handler must not wait on client sends | S | |
