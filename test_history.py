@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 import websockets
+from websockets.sync.client import connect as sync_connect
 
 HERE = Path(__file__).resolve().parent      # folder containing this script
 sys.path.insert(0, str(HERE))
@@ -40,12 +41,21 @@ class Server:
             [sys.executable, "solution_server.py", "--port", str(self.port)],
             cwd=HERE, stdout=subprocess.DEVNULL,
         )
+        # Wait until the server answers a real CLIENT_HELLO. (Probing with a bare
+        # TCP connect makes the server log a harmless but ugly "opening
+        # handshake failed" traceback.)
         deadline = time.time() + 10
         while time.time() < deadline:
+            if self.proc.poll() is not None:
+                raise RuntimeError("solution_server.py exited during start-up")
             try:
-                socket.create_connection(("127.0.0.1", self.port), timeout=0.2).close()
+                with sync_connect(self.uri, open_timeout=1) as ws:
+                    ws.send(json.dumps({"type": "CLIENT_HELLO", "client_id": 0,
+                                        "session": "L1", "last_segment": 0,
+                                        "last_revision": 0, "history_seconds": 0}))
+                    ws.recv(timeout=2)
                 return self
-            except OSError:
+            except (OSError, TimeoutError, websockets.exceptions.WebSocketException):
                 time.sleep(0.1)
         raise RuntimeError("server did not start")
 
@@ -54,10 +64,12 @@ class Server:
         self.proc.wait(timeout=5)
 
 
-async def source(uri, n_segments, gap=0.01, start=1):
+async def source(uri, n_segments, gap=0.01, start=1, on_segment=None):
     async with websockets.connect(uri) as ws:
         await ws.send(json.dumps({"type": "SOURCE_HELLO", "session": "L1"}))
         for seg in range(start, start + n_segments):
+            if on_segment:
+                on_segment(seg)
             for rev in (1, 2, 3):
                 await ws.send(json.dumps({
                     "type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
@@ -80,10 +92,11 @@ async def get_history(uri, last_seg=0, last_rev=0, secs=30):
         return msg["items"]
 
 
-async def join_midstream(uri, out):
+async def join_midstream(uri, out, last_segment):
+    """Join, then collect HISTORY + live finals until the last segment arrives."""
     async with websockets.connect(uri) as ws:
         await hello(ws, secs=60, client_id=3)
-        end = time.time() + 4
+        end = time.time() + 20
         while time.time() < end:
             try:
                 m = json.loads(await asyncio.wait_for(ws.recv(), 0.4))
@@ -93,6 +106,8 @@ async def join_midstream(uri, out):
                 out.extend(("H", i["segment"]) for i in m["items"])
             elif m.get("final"):
                 out.append(("L", m["segment"]))
+                if m["segment"] >= last_segment:
+                    return
 
 
 async def protocol_tests():
@@ -126,19 +141,29 @@ async def protocol_tests():
             assert msg["type"] == "HISTORY"
         print("ok: junk CLIENT_HELLO values are tolerated")
 
+    # Mid-stream join. The client joins when the source reaches segment 40 of
+    # 120 (not after a fixed sleep: Windows timers are coarse, ~15 ms, so short
+    # sleeps can run far faster than intended and the source may already be done).
+    total, join_at = 120, 40
     with Server() as srv:
-        task = asyncio.create_task(source(srv.uri, 300))
-        await asyncio.sleep(1.0)                       # join while the source is running
+        reached = asyncio.Event()
+        task = asyncio.create_task(source(
+            srv.uri, total, gap=0.05,
+            on_segment=lambda seg: reached.set() if seg == join_at else None))
+        await reached.wait()
         out: list = []
-        await join_midstream(srv.uri, out)
+        await join_midstream(srv.uri, out, total)
         await task
         segs = [s for _, s in out]
         n_hist = sum(1 for k, _ in out if k == "H")
+        n_live = len(segs) - n_hist
+        assert n_hist > 0 and n_live > 0, (
+            f"join was not mid-stream ({n_hist} from HISTORY, {n_live} live)")
         assert len(segs) == len(set(segs)), "duplicate final delivered"
         assert segs == sorted(segs), "finals out of order"
-        assert set(range(min(segs), 301)) == set(segs), "gap in finals"
-        print(f"ok: mid-stream join ({n_hist} from HISTORY, {len(segs) - n_hist} live): "
-              f"segments {min(segs)}..300 contiguous, no duplicates")
+        assert set(range(min(segs), total + 1)) == set(segs), "gap in finals"
+        print(f"ok: mid-stream join ({n_hist} from HISTORY, {n_live} live): "
+              f"segments {min(segs)}..{total} contiguous, no duplicates")
 
 
 def unit_tests():
