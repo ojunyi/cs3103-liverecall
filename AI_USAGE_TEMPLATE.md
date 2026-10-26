@@ -4,7 +4,7 @@
 
 List the generative-AI/coding tools used by the team and what each was used for.
 - **Claude (Anthropic; Claude Code / claude.ai sessions, Claude Sonnet 5.5)**, used for:
-  - Designing and drafting the server-side history for requirements 5, 6 and 8 (history half) in `solution_server.py`.
+  - Designing and drafting the server-side history for requirements 5 and 6 (history half) in `solution_server.py`.
   - Drafting `test_history.py` (protocol tests plus unit tests for the history bounds and cache - basically a testcase).
   - Drafting the client changes in `client/app.js` for requirements 3 and 5.
 
