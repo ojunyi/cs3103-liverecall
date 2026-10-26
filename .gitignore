@@ -4,3 +4,4 @@ __pycache__/
 *.csv
 .vscode/
 .idea/
+demo_results*.json
