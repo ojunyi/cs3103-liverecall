@@ -26,6 +26,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
+from collections import deque
 from typing import Any
 
 import websockets
@@ -34,6 +36,59 @@ import websockets
 # There is deliberately no per-client queue or recovery state here.
 CLIENTS: set[Any] = set()
 
+HISTORY_KEEP_SECONDS = 90      # must be >= 60 (the maximum a client may request)
+HISTORY_MAX_ITEMS = 2000       # hard cap, protects against very fast sources
+MAX_REQUEST_SECONDS = 60       # clamp for CLIENT_HELLO.history_seconds
+
+HISTORY: deque[tuple[float, dict[str, Any]]] = deque()  # (server receive time, CAPTION_UPDATE dict), oldest first.
+HISTORY_SEGMENTS: set[int] = set()                      # Segments currently held in HISTORY, so a repeated final is not stored twice.
+
+def prune_history(now: float) -> None:
+    """Drop entries that are too old or exceed the count cap."""
+    while HISTORY and (
+        now - HISTORY[0][0] > HISTORY_KEEP_SECONDS or len(HISTORY) > HISTORY_MAX_ITEMS
+    ):
+        _, old = HISTORY.popleft()
+        HISTORY_SEGMENTS.discard(old["segment"])
+
+def store_final(msg: dict[str, Any]) -> None:
+    """Remember a final caption (once per segment) for recovery and late join."""
+    try:
+        segment = int(msg["segment"])
+        int(msg["revision"])
+    except (KeyError, TypeError, ValueError):
+        return
+    now = time.monotonic()
+    if segment not in HISTORY_SEGMENTS:
+        HISTORY.append((now, msg))
+        HISTORY_SEGMENTS.add(segment)
+    prune_history(now)
+
+def build_history(hello: dict[str, Any]) -> list[dict[str, Any]]:
+    """Finals from the last `history_seconds` that the client does not hold yet.
+ 
+    The client reports its latest FINAL state as (last_segment, last_revision),
+    so we send only finals strictly newer than that, oldest to newest.
+    """
+    try:
+        seconds = int(hello.get("history_seconds", 30))
+    except (TypeError, ValueError):
+        seconds = 30
+    seconds = max(0, min(seconds, MAX_REQUEST_SECONDS))
+    try:
+        have = (int(hello.get("last_segment", 0)), int(hello.get("last_revision", 0)))
+    except (TypeError, ValueError):
+        have = (0, 0)
+ 
+    now = time.monotonic()
+    prune_history(now)
+    cutoff = now - seconds
+    items = [
+        m for t, m in HISTORY
+        if t >= cutoff and (m["segment"], m["revision"]) > have
+    ]
+    items.sort(key=lambda m: (m["segment"], m["revision"]))
+    return items
 
 async def broadcast_naively(raw_message: str) -> None:
     """Send one message directly to every connected client.
@@ -69,7 +124,9 @@ async def handle_source(ws, hello: dict[str, Any]) -> None:
             msg_type = msg.get("type")
             if msg_type == "CAPTION_UPDATE":
                 # Baseline behavior: forward exactly what was received.
-                # No history, state, validation, coalescing, or bounded queues.
+                if msg.get("final") is True:
+                    store_final(msg)
+                # No validation, coalescing, or bounded queues.
                 await broadcast_naively(raw)
             elif msg_type == "SOURCE_DONE":
                 # Test-control message. The specification does not require it
@@ -86,14 +143,13 @@ async def handle_source(ws, hello: dict[str, Any]) -> None:
 async def handle_client(ws, hello: dict[str, Any]) -> None:
     client_id = hello.get("client_id")
 
-    # The baseline has no stored recovery state. Sending an empty HISTORY makes
-    # the connection behavior visible and keeps the starter easy to inspect.
-    # Students must implement correct HISTORY semantics for the assignment.
-    await ws.send(json.dumps({"type": "HISTORY", "items": []}))
-
+    items = build_history(hello)
     CLIENTS.add(ws)
+
     print(f"client connected: id={client_id}; clients={len(CLIENTS)}", flush=True)
+
     try:
+        await ws.send(json.dumps({"type": "HISTORY", "items": items}))
         # Student clients normally don't send further messages after hello.
         # Keep the WebSocket open until the client disconnects.
         async for _ in ws:
