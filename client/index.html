@@ -17,14 +17,14 @@
 <body>
   <h1>LiveRecall</h1>
   <p>Connection: <span id="status">disconnected</span></p>
-  <p class="hint">Starter behavior is intentionally naive: every received revision is appended as a new line.</p>
+  <p class="hint">The live view shows every caption update. The recall buttons list the finalized captions from the last 15, 30 or 60 s.</p>
   <div id="live"></div>
   <div>
     <button data-seconds="30">What did I miss? (30 s)</button>
     <button data-seconds="15">15 s</button>
     <button data-seconds="60">60 s</button>
   </div>
-  <div id="recall">TODO: implement the locally maintained recall view.</div>
+  <div id="recall">Press a button above to see the finalized captions from that time window.</div>
   <script src="app.js"></script>
 </body>
 </html>
