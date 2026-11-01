@@ -1,7 +1,12 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
-*.csv
 .vscode/
 .idea/
+demo_results*.csv
 demo_results*.json
+results/
+*:Zone.Identifier
+*.csv
+*.json
