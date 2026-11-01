@@ -3,28 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>LiveRecall Student Client</title>
+  <title>LiveRecall</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #172234; background: #f7f9fc; }
     #status { font-weight: 700; }
-    #live { min-height: 6rem; border: 1px solid #bbb; border-radius: .4rem; padding: 1rem; margin: 1rem 0; }
-    .naive-line { padding: .25rem 0; border-bottom: 1px dotted #ddd; }
-    button { padding: .55rem .75rem; margin: .2rem; }
-    #recall { white-space: pre-wrap; margin-top: 1rem; border-left: 3px solid #ccc; padding-left: 1rem; }
-    .hint { font-size: .9rem; color: #555; }
+    section { margin: 1.5rem 0; }
+    h2 { font-size: 1.2rem; }
+    #live, #recall { background: white; min-height: 6rem; border: 1px solid #bbc7d7; border-radius: .5rem; padding: 1rem; overflow-y: auto; max-height: 24rem; overflow-wrap: anywhere; }
+    #live.empty::before { content: "Waiting for captions…"; color: #526176; }
+    .caption { padding: .6rem 0; border-bottom: 1px solid #e0e6ef; }
+    .caption:last-child { border-bottom: 0; }
+    .caption-meta { display: block; font-size: .75rem; color: #526176; margin-bottom: .2rem; }
+    .caption-text { white-space: pre-wrap; }
+    .provisional .caption-text { color: #526176; font-style: italic; }
+    button { font: inherit; cursor: pointer; padding: .6rem .8rem; margin: .2rem; border: 1px solid #7b8da8; border-radius: .4rem; background: white; color: #172234; }
+    button[aria-pressed="true"] { background: #174ea6; border-color: #174ea6; color: white; }
+    button:focus-visible { outline: 3px solid #e39b19; outline-offset: 2px; }
+    .hint { font-size: .9rem; color: #526176; }
   </style>
 </head>
 <body>
   <h1>LiveRecall</h1>
-  <p>Connection: <span id="status">disconnected</span></p>
-  <p class="hint">Starter behavior is intentionally naive: every received revision is appended as a new line.</p>
-  <div id="live"></div>
-  <div>
-    <button data-seconds="30">What did I miss? (30 s)</button>
-    <button data-seconds="15">15 s</button>
-    <button data-seconds="60">60 s</button>
-  </div>
-  <div id="recall">TODO: implement the locally maintained recall view.</div>
+  <p>Connection: <span id="status" role="status">Disconnected</span></p>
+  <section aria-labelledby="live-title">
+    <h2 id="live-title">Live captions</h2>
+    <p class="hint">Provisional captions update in place as speech is finalized. Reconnection happens automatically.</p>
+    <div id="live" role="region" aria-label="Live captions" tabindex="0"></div>
+  </section>
+  <section aria-labelledby="recall-title">
+    <h2 id="recall-title">Previous 30 seconds</h2>
+    <div role="group" aria-label="Recall window">
+      <button type="button" data-seconds="30" aria-pressed="true" aria-controls="recall">What did I miss? (30 s)</button>
+      <button type="button" data-seconds="15" aria-pressed="false" aria-controls="recall">15 s</button>
+      <button type="button" data-seconds="60" aria-pressed="false" aria-controls="recall">60 s</button>
+    </div>
+    <p class="hint">Finalized captions only, from the selected rolling window. Two minutes of recent captions are kept locally while this page is open.</p>
+    <div id="recall" role="region" aria-label="Recalled captions" tabindex="0"></div>
+  </section>
   <script src="app.js"></script>
 </body>
 </html>

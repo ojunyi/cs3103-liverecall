@@ -1,120 +1,177 @@
-/*
- * Working but deliberately naive LiveRecall browser starter.
- *
- * Provided mechanical behavior:
- *   - opens a WebSocket
- *   - sends CLIENT_HELLO
- *   - visibly appends every received CAPTION_UPDATE
- *   - displays whether an update is provisional/final
- *
- * Graded TODOs:
- *   - replace revisions rather than appending duplicates
- *   - maintain >=60 s of finalized local state
- *   - implement 30 s default recall + 15/30/60 s views
- *   - automatic reconnect + correct resume state
- *   - HISTORY merge/deduplication
- *   - usable final UI
- */
-
-const WS_URL = "ws://127.0.0.1:8765";
+﻿/* Live and recovered captions share one revision-aware store. */
+const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname || "127.0.0.1"}:8765`;
+const SESSION = "L1";
+const RETENTION_SECONDS = 120;
 const statusEl = document.getElementById("status");
 const liveEl = document.getElementById("live");
 const recallEl = document.getElementById("recall");
-
+const recallTitleEl = document.getElementById("recall-title");
+const captions = new Map();
+const liveRows = new Map();
+let lastFinalSegment = 0;
+let lastFinalRevision = 0;
+let recallSeconds = 30;
+let retryDelay = 1000;
+let retryTimer;
 let ws;
-
-// --- Local finalized state (added for the TODOs below) -----------------------
-const KEEP_SECONDS = 120;            // keep well over the 60 s the largest view needs
-const finals = new Map();            // segment -> final CAPTION_UPDATE
-let lastFinal = { segment: 0, revision: 0 };   // resume state; never pruned
- 
-// Store a final. Returns false if we already hold that segment (duplicate/stale).
-function mergeFinal(msg) {
-  const segment = Number(msg.segment), revision = Number(msg.revision);
-  const held = finals.get(segment);
-  if (held && Number(held.revision) >= revision) return false;
-  finals.set(segment, msg);
-  if (segment > lastFinal.segment ||
-      (segment === lastFinal.segment && revision > lastFinal.revision)) {
-    lastFinal = { segment, revision };
-  }
-  const cutoff = Date.now() / 1000 - KEEP_SECONDS;
-  for (const [seg, m] of finals) if (Number(m.source_ts) < cutoff) finals.delete(seg);
-  return true;
-}
 
 function numericClientId() {
   const key = "liverecall-client-id";
-  let value = sessionStorage.getItem(key);
-  if (!value) {
-    value = String(Math.floor(100000 + Math.random() * 900000));
-    sessionStorage.setItem(key, value);
+  const fallback = Math.floor(100000 + Math.random() * 900000);
+  try {
+    const saved = Number(sessionStorage.getItem(key));
+    if (Number.isSafeInteger(saved) && saved > 0) return saved;
+    sessionStorage.setItem(key, String(fallback));
+  } catch {
+    // Storage may be disabled when opening this page from disk.
   }
-  return Number(value);
+  return fallback;
+}
+const clientId = numericClientId();
+
+function mergeCaption(item, history = false) {
+  if (!item || typeof item !== "object" || item.session !== SESSION ||
+      !Number.isSafeInteger(item.segment) || item.segment < 1 ||
+      !Number.isSafeInteger(item.revision) || item.revision < 1 ||
+      typeof item.final !== "boolean" || typeof item.text !== "string" ||
+      !Number.isFinite(item.source_ts) || item.source_ts < 0 ||
+      (history && !item.final)) return;
+  const previous = captions.get(item.segment);
+  // The required source completes segments in order. Once a final has aged
+  // out, its delayed provisional revisions must not reappear as live rows.
+  if (!previous && !item.final && item.segment <= lastFinalSegment) return;
+  if (previous && (item.revision < previous.revision ||
+      (previous.final && !item.final) ||
+      (item.revision === previous.revision && (previous.final || !item.final)))) return;
+  captions.set(item.segment, { ...item, receivedAt: Date.now() / 1000 });
+  // Retention must not reset the finalized resume cursor.
+  if (item.final && (item.segment > lastFinalSegment ||
+      (item.segment === lastFinalSegment && item.revision > lastFinalRevision))) {
+    lastFinalSegment = item.segment;
+    lastFinalRevision = item.revision;
+  }
 }
 
-function appendNaively(msg) {
+function updateRow(row, caption) {
+  row.className = `caption ${caption.final ? "final" : "provisional"}`;
+  row.dataset.segment = String(caption.segment);
+  row.dataset.revision = String(caption.revision);
+  const label = document.createElement("span");
+  label.className = "caption-meta";
+  label.textContent = `${caption.final ? "Final" : "Provisional"} · Segment ${caption.segment} · Rev ${caption.revision}`;
+  const text = document.createElement("span");
+  text.className = "caption-text";
+  text.textContent = caption.text;
+  row.replaceChildren(label, text);
+}
+function captionRow(caption) {
   const row = document.createElement("div");
-  row.className = "naive-line";
-  const state = msg.final ? "FINAL" : "PROVISIONAL";
-  row.textContent = `[${state}] segment ${msg.segment} rev ${msg.revision}: ${msg.text}`;
-  liveEl.appendChild(row);
-  liveEl.scrollTop = liveEl.scrollHeight;
+  updateRow(row, caption);
+  return row;
 }
-
+function render() {
+  const now = Date.now() / 1000;
+  for (const [segment, caption] of captions) {
+    const timestamp = caption.final ? caption.source_ts : caption.receivedAt;
+    if (timestamp < now - RETENTION_SECONDS) captions.delete(segment);
+  }
+  const ordered = [...captions.values()].sort((a, b) => a.segment - b.segment);
+  const followLive = liveEl.scrollHeight - liveEl.scrollTop - liveEl.clientHeight < 48;
+  for (const [segment, row] of liveRows) {
+    if (!captions.has(segment)) {
+      row.remove();
+      liveRows.delete(segment);
+    }
+  }
+  let previousRow = null;
+  for (const caption of ordered) {
+    let row = liveRows.get(caption.segment);
+    if (!row) {
+      row = captionRow(caption);
+      liveRows.set(caption.segment, row);
+    } else if (row.dataset.revision !== String(caption.revision) ||
+               row.classList.contains("final") !== caption.final) {
+      updateRow(row, caption);
+    }
+    const nextRow = previousRow ? previousRow.nextSibling : liveEl.firstChild;
+    if (nextRow !== row) liveEl.insertBefore(row, nextRow);
+    previousRow = row;
+  }
+  liveEl.classList.toggle("empty", ordered.length === 0);
+  if (followLive) liveEl.scrollTop = liveEl.scrollHeight;
+  const recalled = ordered.filter(caption => caption.final &&
+    caption.source_ts >= now - recallSeconds && caption.source_ts <= now);
+  recallTitleEl.textContent = `Previous ${recallSeconds} seconds`;
+  recallEl.replaceChildren(...recalled.map(captionRow));
+  if (!recalled.length) recallEl.textContent = "No finalized captions in this window yet.";
+}
+function scheduleReconnect() {
+  if (retryTimer) return;
+  statusEl.textContent = `Disconnected · reconnecting in ${retryDelay / 1000} s`;
+  retryTimer = setTimeout(() => {
+    retryTimer = undefined;
+    connect();
+  }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 10000);
+}
 function connect() {
-  statusEl.textContent = "connecting";
-  ws = new WebSocket(WS_URL);
-
-  ws.addEventListener("open", () => {
-    statusEl.textContent = "connected";
-    ws.send(JSON.stringify({
-      type: "CLIENT_HELLO",
-      client_id: numericClientId(),
-      session: "L1",
-      // TODO: resume latest finalized state
-      last_segment: lastFinal.segment,
-      last_revision: lastFinal.revision,
+  statusEl.textContent = "Connecting…";
+  let socket;
+  try {
+    socket = new WebSocket(WS_URL);
+  } catch {
+    scheduleReconnect();
+    return;
+  }
+  ws = socket;
+  const timeout = setTimeout(() => {
+    if (ws === socket && socket.readyState === WebSocket.CONNECTING) socket.close();
+  }, 10000);
+  socket.addEventListener("open", () => {
+    if (ws !== socket) return;
+    clearTimeout(timeout);
+    retryDelay = 1000;
+    statusEl.textContent = "Connected";
+    socket.send(JSON.stringify({
+      type: "CLIENT_HELLO", client_id: clientId, session: SESSION,
+      last_segment: lastFinalSegment, last_revision: lastFinalRevision,
       history_seconds: 60
     }));
   });
-
-  ws.addEventListener("message", (event) => {
-    const msg = JSON.parse(event.data);
+  socket.addEventListener("message", event => {
+    if (ws !== socket) return;
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    if (!msg || typeof msg !== "object") return;
     if (msg.type === "CAPTION_UPDATE") {
-      if (msg.final && !mergeFinal(msg)) return;
-      appendNaively(msg);
-    } else if (msg.type === "HISTORY") {
-      console.log(`HISTORY with ${msg.items?.length ?? 0} item(s)`, msg);
-      // TODO: merge history without stale/duplicate final captions.
-      for (const item of msg.items ?? []) {
-        if (item.final === true && mergeFinal(item)) appendNaively(item);
-      }
+      mergeCaption(msg);
+    } else if (msg.type === "HISTORY" && Array.isArray(msg.items) &&
+               (msg.session === undefined || msg.session === SESSION)) {
+      for (const item of msg.items) mergeCaption(item, true);
+    } else {
+      return;
     }
+    render();
   });
-
-  ws.addEventListener("close", () => {
-    statusEl.textContent = "disconnected";
-    // TODO: automatic reconnect after a short delay, using finalized resume state.
-    setTimeout(connect, 1000);
+  socket.addEventListener("close", () => {
+    clearTimeout(timeout);
+    if (ws === socket) scheduleReconnect();
   });
-
-  ws.addEventListener("error", () => {
-    statusEl.textContent = "connection error";
+  socket.addEventListener("error", () => {
+    if (ws !== socket) return;
+    statusEl.textContent = "Connection error · retrying…";
+    socket.close();
   });
 }
-
 for (const button of document.querySelectorAll("button[data-seconds]")) {
   button.addEventListener("click", () => {
-    const seconds = Number(button.dataset.seconds);
-    const since = Date.now() / 1000 - seconds;
-    const rows = [...finals.values()]
-      .filter((m) => Number(m.source_ts) >= since)
-      .sort((a, b) => a.segment - b.segment);
-    // TODO: show finalized captions from the previous ${seconds} seconds using local state
-    recallEl.textContent = `Previous ${seconds} s (${rows.length} finalized caption(s)):\n` +
-      rows.map((m) => `[-${Math.round(Date.now() / 1000 - m.source_ts)} s] ${m.text}`).join("\n");
+    recallSeconds = Number(button.dataset.seconds);
+    for (const option of document.querySelectorAll("button[data-seconds]")) {
+      option.setAttribute("aria-pressed", String(option === button));
+    }
+    render();
   });
 }
-
+render();
+setInterval(render, 1000);
 connect();
