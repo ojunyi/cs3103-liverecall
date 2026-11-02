@@ -85,9 +85,16 @@ def enqueue_pending(
 CLIENT_QUEUE_MAX_ITEMS = 64  # pending messages, plus at most one in-flight send
 CLIENT_SEND_TIMEOUT_SECONDS = 10  # also bounds a stalled HISTORY or final send
 LAG_PROBE_INTERVAL_SECONDS = 0.5
+# Lag is a pong slower than this client's best round trip by this margin, so a
+# steady network delay (e.g. netem) is not mistaken for a slow reader.
 LAG_THRESHOLD_SECONDS = 0.25
+LAG_INITIAL_RTT_SECONDS = 1.0  # assumed best round trip until one is measured
 # Favor final delivery for sustained slow readers. A brief impairment may
 # therefore suppress some provisional updates until this hold expires.
+# A shorter (10 s, doubling) hold was measured and rejected: each time a slow
+# reader leaves the hold it rebuilds a multi-second backlog in its socket
+# buffers before the next pong reveals it (T3 slow-client fresh ratio fell
+# from ~36% to ~7%).
 LAG_HOLD_SECONDS = 60
 
 
@@ -106,6 +113,11 @@ class ClientState:
 
     def lagging(self) -> bool:
         return asyncio.get_running_loop().time() < self.slow_until
+
+    def lag_timeout(self) -> float:
+        """How long a pong may take before this client counts as lagging."""
+        best = self.best_rtt if self.best_rtt is not None else LAG_INITIAL_RTT_SECONDS
+        return best + LAG_THRESHOLD_SECONDS
 
     def enqueue(self, message: str | bytes) -> bool:
         caption = caption_metadata(message)
@@ -146,7 +158,7 @@ class ClientState:
             sent = loop.time()
             waiter = await self.ws.ping()
             try:
-                await asyncio.wait_for(asyncio.shield(waiter), LAG_THRESHOLD_SECONDS)
+                await asyncio.wait_for(asyncio.shield(waiter), self.lag_timeout())
             except asyncio.TimeoutError:
                 self.slow_until = loop.time() + LAG_HOLD_SECONDS
                 # Do not accumulate outstanding probes on a stalled client.
@@ -376,20 +388,20 @@ async def handle_source(ws, hello: dict[str, Any]) -> None:
 async def handle_client(ws, hello: dict[str, Any]) -> None:
     client_id = hello.get("client_id")
 
+    # Be liberal in what we accept: a malformed recovery field falls back to
+    # its "no state" default (full recent context) instead of closing.
     session = hello.get("session")
-    try:
-        last_segment = hello.get("last_segment", 0)
-        last_revision = hello.get("last_revision", 0)
-        seconds = hello.get("history_seconds", 30)
-        if (not isinstance(session, str)
-                or type(last_segment) is not int or last_segment < 0
-                or type(last_revision) is not int or last_revision < 0
-                or type(seconds) not in (int, float)):
-            raise ValueError("Invalid recovery parameters")
-        items = HISTORY.snapshot(session, last_segment, last_revision, seconds)
-    except ValueError:
-        await ws.close(code=1008, reason="Invalid recovery parameters")
-        return
+    if not isinstance(session, str) or not session:
+        session = REVISION_STATE.session or "L1"
+    last_segment = hello.get("last_segment", 0)
+    last_revision = hello.get("last_revision", 0)
+    if (type(last_segment) is not int or last_segment < 0
+            or type(last_revision) is not int or last_revision < 0):
+        last_segment = last_revision = 0
+    seconds = hello.get("history_seconds", 30)
+    if type(seconds) not in (int, float) or not math.isfinite(seconds):
+        seconds = 30
+    items = HISTORY.snapshot(session, last_segment, last_revision, seconds)
 
     history_message = json.dumps({"type": "HISTORY", "items": items})
     client = ClientState(ws)

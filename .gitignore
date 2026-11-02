@@ -8,5 +8,3 @@ demo_results*.csv
 demo_results*.json
 results/
 *:Zone.Identifier
-*.csv
-*.json
