@@ -87,16 +87,19 @@ CLIENT_SEND_TIMEOUT_SECONDS = 10  # also bounds a stalled HISTORY or final send
 LAG_PROBE_INTERVAL_SECONDS = 0.5
 # Lag is a pong slower than this client's best round trip by this margin, so a
 # steady network delay (e.g. netem) is not mistaken for a slow reader.
-LAG_THRESHOLD_SECONDS = 0.25
+LAG_THRESHOLD_SECONDS = 1.0
 LAG_INITIAL_RTT_SECONDS = 1.0  # assumed best round trip until one is measured
-# Favor final delivery for sustained slow readers. A brief impairment may
-# therefore suppress some provisional updates until this hold expires.
-# A shorter (10 s, doubling) hold was measured and rejected: each time a slow
-# reader leaves the hold it rebuilds a multi-second backlog in its socket
-# buffers before the next pong reveals it (T3 slow-client fresh ratio fell
-# from ~36% to ~7%).
-LAG_HOLD_SECONDS = 60
-
+# A client whose pong is much slower than its own best round trip is lagging.
+# While lagging it gets finals only; its newest provisional per segment is held
+# and sent once the hold ends. The hold is escalating:
+#   - first flag: short hold (LAG_FIRST_HOLD_SECONDS), so a client that merely
+#     hit a network blip converges back to full updates quickly;
+#   - flagged again within LAG_REFLAG_WINDOW_SECONDS after a hold ended: it is a
+#     genuinely slow reader, so use the long hold (LAG_HOLD_SECONDS). Releasing
+#     such a reader early lets its socket buffers refill with stale revisions.
+LAG_FIRST_HOLD_SECONDS = 10     # hold the first time a client is flagged
+LAG_REFLAG_WINDOW_SECONDS = 30  # re-flagged this soon after a hold ended = "keeps lagging"
+LAG_HOLD_SECONDS = 60           # hold for a client that keeps lagging
 
 @dataclass
 class ClientState:
@@ -150,6 +153,13 @@ class ClientState:
         self.held_provisionals.clear()
         self.ready.set()
 
+    def flag_lag(self, now: float) -> None:
+        """First flag: short hold. Flagged again soon after it ended: long hold."""
+        if now >= self.slow_until:
+            again = 0 < self.slow_until and now < self.slow_until + LAG_REFLAG_WINDOW_SECONDS
+            hold = LAG_HOLD_SECONDS if again else LAG_FIRST_HOLD_SECONDS
+            self.slow_until = now + hold
+
     async def monitor_receiver_lag(self) -> None:
         """Use pongs to detect backlog hidden in WebSocket/TCP buffers."""
         loop = asyncio.get_running_loop()
@@ -160,7 +170,7 @@ class ClientState:
             try:
                 await asyncio.wait_for(asyncio.shield(waiter), self.lag_timeout())
             except asyncio.TimeoutError:
-                self.slow_until = loop.time() + LAG_HOLD_SECONDS
+                self.flag_lag(loop.time())
                 # Do not accumulate outstanding probes on a stalled client.
                 try:
                     await asyncio.wait_for(waiter, CLIENT_SEND_TIMEOUT_SECONDS)
@@ -170,7 +180,7 @@ class ClientState:
             rtt = loop.time() - sent
             self.best_rtt = rtt if self.best_rtt is None else min(self.best_rtt, rtt)
             if rtt - self.best_rtt > LAG_THRESHOLD_SECONDS:
-                self.slow_until = loop.time() + LAG_HOLD_SECONDS
+                self.flag_lag(loop.time())
             self.flush_held()
 
     def evict(self, reason: str) -> None:
