@@ -38,9 +38,12 @@ Per-client overload policy
              slow), or when a final has waited RESYNC_AGE in the queue.
     reader   after a reader resync the client's consumption rate is known
              (messages it drained / time until it reconnected). It then gets
-             finals only (READER_HOLD), or, if it cannot even keep up with the
-             finals, periodic HISTORY batches ("batched") so that no final is
-             stranded in its receive buffer.
+             finals only, or, if it cannot even keep up with the finals,
+             periodic HISTORY batches ("batched") so that no final is stranded
+             in its receive buffer. Finals-only lasts an adaptive reader hold
+             (15 s, doubling to 60 s only while it keeps proving slow), after
+             which it returns to full updates; batching lasts 60 s, because a
+             failed full-rate re-test would strand finals.
 
 Every structure is bounded: history by age and count, revision state by a
 segment window, each client queue by item count, held provisionals per client,
@@ -93,7 +96,8 @@ NETWORK_HOLD_BASE_SECONDS = 8.0  # first finals-only hold after a network lag
 NETWORK_HOLD_MAX_SECONDS = 40.0
 HOLD_JITTER = 0.25               # +-25%: clients return to full rate staggered
 HOLD_RESET_SECONDS = 30.0        # lag recurring within this doubles the hold
-READER_HOLD_SECONDS = 60.0       # a proven slow reader stays degraded this long
+READER_HOLD_BASE_SECONDS = 15.0  # first finals-only hold for a proven slow reader
+READER_HOLD_MAX_SECONDS = 60.0   # doubles each time it is still slow afterwards
 BATCH_SECONDS = 1.0              # batched client: resync once a final waits this
 BATCH_RATE_MARGIN = 1.2          # batch if reader rate < finals rate * margin
 FULL_RATE_FRACTION = 0.9         # reader rate >= this * update rate: not slow
@@ -308,7 +312,8 @@ class LagMemory:
     """What a reconnecting client's previous connections taught us."""
 
     __slots__ = ("net_hold", "last_exit", "lag_until", "reader_at", "reader_sent",
-                 "reader_first", "reader_until", "batched_until", "updated")
+                 "reader_first", "reader_hold", "reader_until", "batched_until",
+                 "updated")
 
     def __init__(self) -> None:
         self.net_hold = NETWORK_HOLD_BASE_SECONDS
@@ -317,6 +322,7 @@ class LagMemory:
         self.reader_at = -math.inf      # last resync caused by a slow reader
         self.reader_sent = 0            # captions written on that connection
         self.reader_first = math.inf    # first caption write on that connection
+        self.reader_hold = READER_HOLD_BASE_SECONDS
         self.reader_until = 0.0         # slow reader: finals only until then
         self.batched_until = 0.0        # very slow reader: HISTORY batches until then
         self.updated = 0.0
@@ -532,9 +538,13 @@ class ClientState:
             if update_rate > 0 and rate >= FULL_RATE_FRACTION * update_rate:
                 pass                            # it kept up: not a slow reader
             elif final_rate > 0 and rate < BATCH_RATE_MARGIN * final_rate:
-                memory.batched_until = now + READER_HOLD_SECONDS
+                # Too slow even for finals: a full-rate re-test would strand
+                # finals in its receive buffer, so batching keeps the long hold.
+                memory.batched_until = now + READER_HOLD_MAX_SECONDS
             else:
-                memory.reader_until = now + READER_HOLD_SECONDS
+                memory.reader_until = now + memory.reader_hold
+        if 0 < memory.batched_until <= now and memory.last_exit < memory.batched_until:
+            memory.last_exit = memory.batched_until     # batched period has ended
         if now < memory.batched_until:
             self.batched = True
         elif now < memory.reader_until:
@@ -755,6 +765,12 @@ class ClientState:
         memory = self.memory
         now = self.loop.time()
         if not self.batched and self.captions_sent > 0:
+            # Still slow soon after its last hold ended: hold it longer next
+            # time; otherwise this is a fresh episode and starts short.
+            if now - memory.last_exit < HOLD_RESET_SECONDS:
+                memory.reader_hold = min(memory.reader_hold * 2, READER_HOLD_MAX_SECONDS)
+            else:
+                memory.reader_hold = READER_HOLD_BASE_SECONDS
             memory.reader_at = now
             memory.reader_sent = self.captions_sent
             memory.reader_first = self.first_caption_at

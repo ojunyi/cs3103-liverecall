@@ -224,6 +224,26 @@ async def test_path_baseline_is_shared_per_address():
     print("ok: connections from one address share a path baseline, so late joiners detect queues")
 
 
+async def test_reader_hold_is_adaptive():
+    """A slow reader's finals-only hold starts short, doubles only while it
+    keeps proving slow right after a hold, and resets once it recovers."""
+    def resync(last_exit_ago, hold):
+        c = client(key=("L1", f"r{last_exit_ago}-{hold}"))
+        c.memory.reader_hold = hold
+        c.memory.last_exit = c.loop.time() - last_exit_ago
+        c.captions_sent, c.first_caption_at = 10, c.loop.time() - 5
+        c.reader_resync()
+        assert c.closed
+        return c.memory.reader_hold
+    base, top = s.READER_HOLD_BASE_SECONDS, s.READER_HOLD_MAX_SECONDS
+    assert resync(float("inf"), base) == base                  # first episode
+    assert resync(5, base) == 2 * base                         # slow again soon after
+    assert resync(5, top) == top                               # capped
+    assert resync(s.HOLD_RESET_SECONDS + 1, top) == base       # recovered meanwhile
+    print(f"ok: slow-reader hold starts at {base:.0f} s, doubles to {top:.0f} s only "
+          "while the reader stays slow, then resets")
+
+
 async def test_reader_memory_chooses_mode():
     loop = asyncio.get_running_loop()
     now = loop.time()
@@ -241,6 +261,7 @@ async def test_reader_memory_chooses_mode():
 
     c = reconnect(1, 2.0)                    # between finals rate and update rate
     assert c.lagging and not c.batched
+    assert c.lag_until - loop.time() <= s.READER_HOLD_BASE_SECONDS + 0.1
     c = reconnect(2, 1.0)                    # slower than the finals themselves
     assert c.batched and not c.lagging
     c = reconnect(3, 4.0)                    # kept up with everything: not slow
@@ -336,6 +357,7 @@ async def async_tests():
     await test_delay_and_loss_never_look_like_lag()
     await test_standing_queue_means_congestion()
     await test_path_baseline_is_shared_per_address()
+    await test_reader_hold_is_adaptive()
     await test_reader_memory_chooses_mode()
     await test_slow_client_isolated_end_to_end()
     await test_reader_slower_than_finals_gets_every_final()
