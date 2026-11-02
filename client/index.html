@@ -5,41 +5,69 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LiveRecall</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #172234; background: #f7f9fc; }
-    #status { font-weight: 700; }
-    section { margin: 1.5rem 0; }
-    h2 { font-size: 1.2rem; }
-    #live, #recall { background: white; min-height: 6rem; border: 1px solid #bbc7d7; border-radius: .5rem; padding: 1rem; overflow-y: auto; max-height: 24rem; overflow-wrap: anywhere; }
-    #live.empty::before { content: "Waiting for captions…"; color: #526176; }
-    .caption { padding: .6rem 0; border-bottom: 1px solid #e0e6ef; }
+    :root { --ink: #172234; --muted: #526176; --line: #bbc7d7; --soft: #e0e6ef; --accent: #174ea6; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 1.5rem auto; padding: 0 1rem; color: var(--ink); background: #f7f9fc; }
+    header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; }
+    h1 { margin: 0; font-size: 1.6rem; }
+    h2 { font-size: 1.15rem; margin: 0 0 .4rem; }
+    section { margin: 1.25rem 0; }
+    #status { display: inline-block; font-weight: 700; padding: .3rem .7rem; border-radius: 999px; background: #eef1f6; border: 1px solid var(--line); }
+    #status[data-state="online"] { background: #e3f4e8; border-color: #6fb487; color: #145a2c; }
+    #status[data-state="offline"] { background: #fdecea; border-color: #e29a92; color: #8a1f14; }
+    #status[data-state="connecting"] { background: #fff6dd; border-color: #e3c063; color: #6b4e00; }
+    .panel { background: white; border: 1px solid var(--line); border-radius: .5rem; padding: .5rem 1rem; overflow-y: auto; overflow-wrap: anywhere; }
+    #live { min-height: 8rem; max-height: 22rem; }
+    #recall { min-height: 4rem; max-height: 20rem; }
+    #live.empty::before { content: "Waiting for captions…"; display: block; padding: .6rem 0; color: var(--muted); }
+    .caption { padding: .55rem 0 .55rem .7rem; border-bottom: 1px solid var(--soft); border-left: 4px solid transparent; }
     .caption:last-child { border-bottom: 0; }
-    .caption-meta { display: block; font-size: .75rem; color: #526176; margin-bottom: .2rem; }
-    .caption-text { white-space: pre-wrap; }
-    .provisional .caption-text { color: #526176; font-style: italic; }
-    button { font: inherit; cursor: pointer; padding: .6rem .8rem; margin: .2rem; border: 1px solid #7b8da8; border-radius: .4rem; background: white; color: #172234; }
-    button[aria-pressed="true"] { background: #174ea6; border-color: #174ea6; color: white; }
+    .caption.final { border-left-color: #2f6fd6; }
+    .caption.provisional { border-left: 4px dashed #c9a227; background: #fffbea; }
+    .caption-meta { display: block; font-size: .75rem; color: var(--muted); margin-bottom: .15rem; }
+    .caption-text { white-space: pre-wrap; font-size: 1.05rem; }
+    .provisional .caption-text { color: var(--muted); font-style: italic; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .4rem 0 .6rem; }
+    button { font: inherit; cursor: pointer; padding: .55rem .8rem; border: 1px solid #7b8da8; border-radius: .4rem; background: white; color: var(--ink); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 700; }
+    button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: white; }
     button:focus-visible { outline: 3px solid #e39b19; outline-offset: 2px; }
-    .hint { font-size: .9rem; color: #526176; }
+    .hint { font-size: .9rem; color: var(--muted); margin: .3rem 0; }
+    details { margin-top: 2rem; }
   </style>
 </head>
 <body>
-  <h1>LiveRecall</h1>
-  <p>Connection: <span id="status" role="status">Disconnected</span></p>
+  <header>
+    <h1>LiveRecall</h1>
+    <p>Connection: <span id="status" role="status" data-state="connecting">Connecting…</span></p>
+  </header>
+
   <section aria-labelledby="live-title">
     <h2 id="live-title">Live captions</h2>
-    <p class="hint">Provisional captions update in place as speech is finalized. Reconnection happens automatically.</p>
-    <div id="live" role="region" aria-label="Live captions" tabindex="0"></div>
-  </section>
-  <section aria-labelledby="recall-title">
-    <h2 id="recall-title">Previous 30 seconds</h2>
-    <div role="group" aria-label="Recall window">
-      <button type="button" data-seconds="30" aria-pressed="true" aria-controls="recall">What did I miss? (30 s)</button>
-      <button type="button" data-seconds="15" aria-pressed="false" aria-controls="recall">15 s</button>
-      <button type="button" data-seconds="60" aria-pressed="false" aria-controls="recall">60 s</button>
+    <p class="hint">Provisional text (yellow, italic) is updated in place until it becomes final (blue).</p>
+    <div id="live" class="panel" role="region" aria-label="Live captions" tabindex="0"></div>
+    <div class="toolbar">
+      <button type="button" id="what-did-i-miss" class="primary" aria-expanded="false" aria-controls="recall-panel">What did I miss?</button>
     </div>
-    <p class="hint">Finalized captions only, from the selected rolling window. Two minutes of recent captions are kept locally while this page is open.</p>
-    <div id="recall" role="region" aria-label="Recalled captions" tabindex="0"></div>
   </section>
+
+  <section id="recall-panel" aria-labelledby="recall-title" hidden>
+    <h2 id="recall-title">What did I miss? Previous 30 seconds</h2>
+    <div class="toolbar" role="group" aria-label="Recall window">
+      <button type="button" data-seconds="15" aria-pressed="false" aria-controls="recall">15 s</button>
+      <button type="button" data-seconds="30" aria-pressed="true" aria-controls="recall">30 s</button>
+      <button type="button" data-seconds="60" aria-pressed="false" aria-controls="recall">60 s</button>
+      <button type="button" id="close-recall">Close</button>
+    </div>
+    <p class="hint">Finalized captions from this device's own recent history; it keeps updating while open.</p>
+    <div id="recall" class="panel" role="region" aria-label="Recalled captions" tabindex="0"></div>
+  </section>
+
+  <details>
+    <summary>Demo tools</summary>
+    <p class="hint">Drops this browser's connection for 10 seconds. It then reconnects automatically and recovers only the finals it missed.</p>
+    <button type="button" id="simulate-disconnect">Simulate 10-second disconnect</button>
+  </details>
+
   <script src="app.js"></script>
 </body>
 </html>

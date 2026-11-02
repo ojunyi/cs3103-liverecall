@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the LiveRecall server history (late join, resume, bounds).
+"""Tests for the LiveRecall server: revision state, history, late join, resume.
 
 Run from the repository root, with the venv active:
     python test_history.py
@@ -64,32 +64,73 @@ class Server:
         self.proc.wait(timeout=5)
 
 
-async def source(uri, n_segments, gap=0.01, start=1, on_segment=None):
+def update(seg, rev, final, text=None, **extra):
+    msg = {"type": "CAPTION_UPDATE", "session": "L1", "segment": seg, "revision": rev,
+           "source_ts": time.time(), "final": final, "text": text or f"seg{seg} rev{rev}"}
+    msg.update(extra)
+    return json.dumps(msg)
+
+
+async def send_events(uri, events, gap=0.01, done=False):
+    """events: iterable of (segment, revision, final)."""
+    async with websockets.connect(uri) as ws:
+        await ws.send(json.dumps({"type": "SOURCE_HELLO", "session": "L1"}))
+        for seg, rev, final in events:
+            await ws.send(update(seg, rev, final, extra_field="ignored"))
+            await asyncio.sleep(gap)
+        if done:
+            await ws.send(json.dumps({"type": "SOURCE_DONE", "session": "L1"}))
+            await asyncio.sleep(0.05)
+
+
+async def source(uri, n_segments, gap=0.01, start=1, on_segment=None, done=False):
     async with websockets.connect(uri) as ws:
         await ws.send(json.dumps({"type": "SOURCE_HELLO", "session": "L1"}))
         for seg in range(start, start + n_segments):
             if on_segment:
                 on_segment(seg)
             for rev in (1, 2, 3):
-                await ws.send(json.dumps({
-                    "type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
-                    "revision": rev, "source_ts": time.time(), "final": rev == 3,
-                    "text": f"seg{seg} rev{rev}", "extra_field": "ignored"}))
+                await ws.send(update(seg, rev, rev == 3, extra_field="ignored"))
             await asyncio.sleep(gap)
+        if done:
+            await ws.send(json.dumps({"type": "SOURCE_DONE", "session": "L1"}))
+            await asyncio.sleep(0.05)
 
 
-async def hello(ws, last_seg=0, last_rev=0, secs=30, client_id=1):
-    await ws.send(json.dumps({
-        "type": "CLIENT_HELLO", "client_id": client_id, "session": "L1",
-        "last_segment": last_seg, "last_revision": last_rev, "history_seconds": secs}))
+async def hello(ws, last_seg=0, last_rev=0, secs=30, client_id=1, **extra):
+    msg = {"type": "CLIENT_HELLO", "client_id": client_id, "session": "L1",
+           "last_segment": last_seg, "last_revision": last_rev, "history_seconds": secs}
+    msg.update(extra)
+    await ws.send(json.dumps(msg))
 
 
-async def get_history(uri, last_seg=0, last_rev=0, secs=30):
+async def get_history_msg(uri, last_seg=0, last_rev=0, secs=30, **extra):
     async with websockets.connect(uri) as ws:
-        await hello(ws, last_seg, last_rev, secs)
+        await hello(ws, last_seg, last_rev, secs, **extra)
         msg = json.loads(await asyncio.wait_for(ws.recv(), 3))
         assert msg["type"] == "HISTORY", msg
-        return msg["items"]
+        return msg
+
+
+async def get_history(uri, last_seg=0, last_rev=0, secs=30, **extra):
+    return (await get_history_msg(uri, last_seg, last_rev, secs, **extra))["items"]
+
+
+async def collect(uri, out, idle=1.5, **hello_args):
+    """Record (kind, type, segment, revision, final) until idle for `idle` s."""
+    async with websockets.connect(uri) as ws:
+        await hello(ws, **hello_args)
+        try:
+            while True:
+                m = json.loads(await asyncio.wait_for(ws.recv(), idle))
+                if m["type"] == "HISTORY":
+                    out.extend(("H", i["segment"], i["revision"], i["final"]) for i in m["items"])
+                elif m["type"] == "CAPTION_UPDATE":
+                    out.append(("L", m["segment"], m["revision"], m["final"]))
+                else:
+                    out.append((m["type"], m.get("lecture")))
+        except asyncio.TimeoutError:
+            return
 
 
 async def join_midstream(uri, out, last_segment):
@@ -120,7 +161,7 @@ async def protocol_tests():
         assert [i["segment"] for i in items] == list(range(1, 11))
         assert all(i["final"] is True and i["revision"] == 3 for i in items)
         assert all(i.get("extra_field") == "ignored" for i in items)
-        print("ok: late join gets 10 finals, oldest to newest, finals only")
+        print("ok: late join gets 10 finals, oldest to newest, finals only, extra fields kept")
 
         segs = [i["segment"] for i in await get_history(srv.uri, 6, 3)]
         assert segs == [7, 8, 9, 10], segs
@@ -139,7 +180,70 @@ async def protocol_tests():
                                       "last_segment": "abc", "history_seconds": None}))
             msg = json.loads(await asyncio.wait_for(ws.recv(), 3))
             assert msg["type"] == "HISTORY"
-        print("ok: junk CLIENT_HELLO values are tolerated")
+        async with websockets.connect(srv.uri) as ws:
+            await ws.send("not json")
+            await asyncio.wait_for(ws.wait_closed(), 3)
+        print("ok: junk CLIENT_HELLO values and a non-JSON hello are tolerated")
+
+        # Duplicates, stale revisions and post-final revisions are never forwarded.
+        out: list = []
+        task = asyncio.create_task(collect(srv.uri, out, last_seg=10, last_rev=3))
+        await asyncio.sleep(0.3)
+        await send_events(srv.uri, [(11, 1, False), (11, 1, False), (11, 3, False),
+                                    (11, 2, False), (11, 4, True), (11, 5, False),
+                                    (10, 4, True), (12, 1, False)])
+        await task
+        live = [x[1:] for x in out if x[0] == "L"]
+        assert live == [(11, 1, False), (11, 3, False), (11, 4, True), (12, 1, False)], live
+        print("ok: duplicate, stale, post-final and closed-segment updates are dropped")
+
+    with Server() as srv:
+        # Segment N+1 may start before segment N is final.
+        out = []
+        task = asyncio.create_task(collect(srv.uri, out))
+        await asyncio.sleep(0.3)
+        await send_events(srv.uri, [(1, 1, False), (2, 1, False), (1, 2, True),
+                                    (2, 2, False), (3, 1, False), (2, 3, True), (3, 2, True)])
+        await task
+        finals = [x[1] for x in out if x[0] == "L" and x[3]]
+        assert finals == [1, 2, 3], out
+        print("ok: overlapping segments keep every final")
+
+    with Server() as srv:
+        # A restarted source without SOURCE_DONE must not replay old segments.
+        await source(srv.uri, 3)
+        out = []
+        task = asyncio.create_task(collect(srv.uri, out, last_seg=3, last_rev=3))
+        await asyncio.sleep(0.3)
+        await source(srv.uri, 3)
+        await task
+        assert out == [], out
+        print("ok: a replay from a reconnected source is ignored")
+
+    with Server() as srv:
+        # SOURCE_DONE then a source starting at segment 1 is a new lecture.
+        await source(srv.uri, 3, done=True)
+        first = await get_history_msg(srv.uri)
+        out = []
+        task = asyncio.create_task(collect(srv.uri, out, last_seg=3, last_rev=3))
+        await asyncio.sleep(0.3)
+        await source(srv.uri, 2, done=True)
+        await task
+        assert out[0] == ("SESSION_RESET", first["lecture"] + 1), out
+        assert [x[1:] for x in out[1:] if x[0] == "L" and x[3]] == [(1, 3, True), (2, 3, True)]
+        stale = await get_history_msg(srv.uri, 3, 3, lecture=first["lecture"])
+        assert stale["lecture"] == first["lecture"] + 1
+        assert [i["segment"] for i in stale["items"]] == [1, 2]
+        print("ok: after SOURCE_DONE a new lecture resets state and old cursors")
+
+    with Server() as srv:
+        # A resuming client gets its whole gap, not only history_seconds.
+        await source(srv.uri, 10)
+        await asyncio.sleep(1.5)
+        assert await get_history(srv.uri, secs=1) == []
+        segs = [i["segment"] for i in await get_history(srv.uri, 3, 3, secs=1)]
+        assert segs == list(range(4, 11)), segs
+        print("ok: resume returns every retained missed final; late join honours history_seconds")
 
     # Mid-stream join. The client joins when the source reaches segment 40 of
     # 120 (not after a fixed sleep: Windows timers are coarse, ~15 ms, so short
@@ -151,7 +255,7 @@ async def protocol_tests():
             srv.uri, total, gap=0.05,
             on_segment=lambda seg: reached.set() if seg == join_at else None))
         await reached.wait()
-        out: list = []
+        out = []
         await join_midstream(srv.uri, out, total)
         await task
         segs = [s for _, s in out]
@@ -171,69 +275,101 @@ def unit_tests():
 
     class Clock:
         now = 1_000_000.0
+
         def __call__(self):
             return self.now
 
-    def final(seg, ts, rev=3):
-        return {"type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
-                "revision": rev, "source_ts": ts, "final": True, "text": "t"}
+    def segments(payloads):
+        return [json.loads(p)["segment"] for p in payloads]
 
-    def keys(items):
-        return [(i["segment"], i["revision"]) for i in items]
-
-    # bounded by age: nothing older than max_seconds survives
+    # bounded by age: nothing older than the retention window survives
     clock = Clock()
-    h = s.FinalizedHistory(clock=clock)
+    h = s.FinalHistory(clock=clock)
     for i in range(1, 51):
-        h.record(final(i, clock.now))
-    clock.now += h.max_seconds + 1
-    h.record(final(51, clock.now))
-    assert keys(h.snapshot("L1", history_seconds=60)) == [(51, 3)]
-    assert len(h._items) == 1
-    print("ok: finals older than the history window are dropped")
+        h.record(i, 3, update(i, 3, True))
+    clock.now += h.retain_seconds + 1
+    h.record(51, 3, update(51, 3, True))
+    assert segments(h.snapshot(0, 0, 60)) == [51] and len(h) == 1
+    print("ok: finals older than the retention window are dropped")
 
-    # a repeated or older final is stored once; a stale one never replaces it
-    clock = Clock()
-    h = s.FinalizedHistory(clock=clock)
-    h.record(final(1, clock.now)); h.record(final(1, clock.now)); h.record(final(1, clock.now, rev=2))
-    h.record(final(2, clock.now))
-    assert keys(h.snapshot("L1")) == [(1, 3), (2, 3)]
-    print("ok: repeated final stored once; an older revision cannot replace it")
+    # bounded by count as well
+    h = s.FinalHistory(max_items=5, clock=Clock())
+    for i in range(1, 21):
+        h.record(i, 3, update(i, 3, True))
+    assert len(h) == 5 and segments(h.snapshot(0, 0, 60)) == [16, 17, 18, 19, 20]
+    print("ok: history is also bounded by item count")
 
-    # cursor, ordering, window and clamp
+    # a segment is stored once
+    h = s.FinalHistory(clock=Clock())
+    h.record(1, 3, update(1, 3, True))
+    h.record(1, 3, update(1, 3, True))
+    h.record(2, 3, update(2, 3, True))
+    assert segments(h.snapshot(0, 0, 60)) == [1, 2]
+    print("ok: a repeated final is stored once")
+
+    # cursor, ordering, window, clamp to retention
     clock = Clock()
-    h = s.FinalizedHistory(clock=clock)
+    h = s.FinalHistory(clock=clock)
     for i in range(1, 11):
-        h.record(final(i, clock.now - 70 + 7 * i))      # ages 63 s .. 0 s
-    assert [k for k, _ in keys(h.snapshot("L1", 6, 3, 60))] == [7, 8, 9, 10]
-    assert [k for k, _ in keys(h.snapshot("L1", 0, 0, 15))] == [8, 9, 10]
-    assert keys(h.snapshot("L1", 0, 0, 9999)) == keys(h.snapshot("L1", 0, 0, 60))
-    assert h.snapshot("L1", 0, 0, 0) == [] and h.snapshot("L2") == []
-    print("ok: cursor, 15/60 s windows, clamp to 60 s and session filter")
+        clock.now = 1_000_000.0 - 70 + 7 * i               # ages 63 s .. 0 s
+        h.record(i, 3, update(i, 3, True))
+    clock.now = 1_000_000.0
+    assert segments(h.snapshot(6, 3, 60)) == [7, 8, 9, 10]
+    assert segments(h.snapshot(0, 0, 15)) == [8, 9, 10]
+    assert segments(h.snapshot(0, 0, 9999)) == list(range(1, 11))
+    assert h.snapshot(0, 0, 0) == []
+    print("ok: cursor, 15/60 s windows and retention clamp")
 
-    # revision watermark: newer only, finals are terminal
-    r = s.CaptionRevisionState()
+    # out-of-order finals are returned sorted
+    h = s.FinalHistory(clock=Clock())
+    for seg in (2, 1, 3):
+        h.record(seg, 2, update(seg, 2, True))
+    assert segments(h.snapshot(0, 0, 60)) == [1, 2, 3]
+    print("ok: HISTORY items are ordered oldest to newest by segment")
+
+    # revision watermark: newer only, finals are terminal, per segment
+    r = s.RevisionState()
+
     def upd(seg, rev, fin=False, **kw):
         m = {"type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
              "revision": rev, "source_ts": 1.0, "final": fin, "text": "t"}
         m.update(kw)
         return r.accept(m, "L1")
     assert upd(1, 1) and upd(1, 2) and not upd(1, 2) and not upd(1, 1)
-    assert upd(1, 3, True) and not upd(1, 4)              # nothing after a final
-    assert upd(2, 1) and not upd(1, 5, True)              # no going back
-    assert not upd(3, True) and not upd(3, 1, text=None) and not upd(3, 1, session="L2")
-    assert upd(3, 1, extra="ignored")
-    print("ok: revision watermark rejects stale, duplicate, post-final and malformed updates")
+    assert upd(1, 3, True) and not upd(1, 4)               # nothing after a final
+    assert upd(2, 1) and not upd(1, 5, True)               # a final segment stays closed
+    assert upd(3, 1) and upd(2, 2, True)                   # overlapping segments
+    assert not upd(4, True) and not upd(4, 1, text=None) and not upd(4, 1, session="L2")
+    assert not upd(4, 1, source_ts=float("nan")) and not upd(0, 1) and not upd(4, 0)
+    assert upd(4, 1, extra="ignored")
+    print("ok: revision state rejects stale, duplicate, post-final and malformed updates")
+
+    r = s.RevisionState(window=10)
+    for seg in range(1, 101):
+        assert r.accept({"type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
+                         "revision": 1, "source_ts": 1.0, "final": True, "text": "t"}, "L1")
+    assert len(r.segments) <= 10 and r.floor == 90
+    print("ok: revision state is bounded by a segment window")
+
+    # HISTORY messages are valid JSON, chunked only when very large
+    msgs = s.history_messages([update(1, 3, True), update(2, 3, True)], "L1", 4)
+    body = json.loads(msgs[0])
+    assert len(msgs) == 1 and body["lecture"] == 4 and len(body["items"]) == 2
+    many = [update(i, 1, True) for i in range(1, s.HISTORY_CHUNK_ITEMS + 2)]
+    chunks = [json.loads(m)["items"] for m in s.history_messages(many, "L1", 1)]
+    assert [len(c) for c in chunks] == [s.HISTORY_CHUNK_ITEMS, 1]
+    print("ok: HISTORY encoding and chunking")
 
     # timing: a reconnect storm against about 60 s of finals
     clock = Clock()
-    h = s.FinalizedHistory(clock=clock)
+    h = s.FinalHistory(clock=clock)
     for i in range(1, 81):
-        h.record(final(i, clock.now - 60 + i * 0.75))
+        clock.now = 1_000_000.0 - 60 + i * 0.75
+        h.record(i, 3, update(i, 3, True))
     n = 5000
     t0 = time.perf_counter()
     for k in range(n):
-        h.snapshot("L1", 40 + (k % 10), 3, 60)
+        s.history_messages(h.snapshot(40 + (k % 10), 3, 60), "L1", 1)
     ms = (time.perf_counter() - t0) * 1000
     print(f"info: {n} HISTORY snapshots took {ms:.0f} ms ({ms / n * 1000:.1f} us each)")
 
