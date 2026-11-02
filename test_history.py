@@ -169,70 +169,73 @@ async def protocol_tests():
 def unit_tests():
     import solution_server as s
 
-    def reset():
-        s._h_times.clear(); s._h_keys.clear(); s._h_raw.clear()
-        s._h_segments.clear(); s._h_cache.clear()
+    class Clock:
+        now = 1_000_000.0
+        def __call__(self):
+            return self.now
 
-    def final(seg, rev=3):
-        msg = {"type": "CAPTION_UPDATE", "segment": seg, "revision": rev,
-               "source_ts": 0.0, "final": True, "text": "t"}
-        s.store_final(msg, json.dumps(msg))
+    def final(seg, ts, rev=3):
+        return {"type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
+                "revision": rev, "source_ts": ts, "final": True, "text": "t"}
 
-    def items_of(payload):
-        m = json.loads(payload)
-        assert m["type"] == "HISTORY"
-        return [(i["segment"], i["revision"]) for i in m["items"]]
+    def keys(items):
+        return [(i["segment"], i["revision"]) for i in items]
 
-    # bounded by count
-    reset()
-    for i in range(1, s.HISTORY_MAX_ITEMS + 5001):
-        final(i)
-    assert len(s._h_times) == s.HISTORY_MAX_ITEMS == len(s._h_segments)
-    assert s._h_keys[-1][0] == s.HISTORY_MAX_ITEMS + 5000
-    print(f"ok: history capped at {s.HISTORY_MAX_ITEMS} entries")
-
-    # bounded by age
-    reset()
+    # bounded by age: nothing older than max_seconds survives
+    clock = Clock()
+    h = s.FinalizedHistory(clock=clock)
     for i in range(1, 51):
-        final(i)
-    s._h_times[:] = [t - 1000 for t in s._h_times]       # pretend they are 1000 s old
-    s.prune_history(time.monotonic())
-    assert not s._h_times and not s._h_segments
-    print("ok: entries older than HISTORY_KEEP_SECONDS are dropped")
+        h.record(final(i, clock.now))
+    clock.now += h.max_seconds + 1
+    h.record(final(51, clock.now))
+    assert keys(h.snapshot("L1", history_seconds=60)) == [(51, 3)]
+    assert len(h._items) == 1
+    print("ok: finals older than the history window are dropped")
 
-    # a repeated final is stored once; cache follows changes
-    reset()
-    final(1); final(1); final(2)
-    assert s._h_keys == [(1, 3), (2, 3)]
-    first = s.build_history({"last_segment": 0, "last_revision": 0, "history_seconds": 30})
-    assert items_of(first) == [(1, 3), (2, 3)]
-    assert s.build_history({"last_segment": 0, "last_revision": 0, "history_seconds": 30}) is first
-    final(3)                                              # cache must not serve stale data
-    again = s.build_history({"last_segment": 0, "last_revision": 0, "history_seconds": 30})
-    assert items_of(again) == [(1, 3), (2, 3), (3, 3)]
-    other = s.build_history({"last_segment": 2, "last_revision": 3, "history_seconds": 30})
-    assert items_of(other) == [(3, 3)]
-    print("ok: repeated final stored once; cache is invalidated and keyed per client state")
+    # a repeated or older final is stored once; a stale one never replaces it
+    clock = Clock()
+    h = s.FinalizedHistory(clock=clock)
+    h.record(final(1, clock.now)); h.record(final(1, clock.now)); h.record(final(1, clock.now, rev=2))
+    h.record(final(2, clock.now))
+    assert keys(h.snapshot("L1")) == [(1, 3), (2, 3)]
+    print("ok: repeated final stored once; an older revision cannot replace it")
 
-    # cache cannot grow without bound
-    reset()
+    # cursor, ordering, window and clamp
+    clock = Clock()
+    h = s.FinalizedHistory(clock=clock)
     for i in range(1, 11):
-        final(i)
-    for k in range(s.HISTORY_CACHE_MAX * 3):
-        s.build_history({"last_segment": k % 7, "last_revision": k, "history_seconds": 30})
-    assert len(s._h_cache) <= s.HISTORY_CACHE_MAX
-    print("ok: payload cache is bounded")
+        h.record(final(i, clock.now - 70 + 7 * i))      # ages 63 s .. 0 s
+    assert [k for k, _ in keys(h.snapshot("L1", 6, 3, 60))] == [7, 8, 9, 10]
+    assert [k for k, _ in keys(h.snapshot("L1", 0, 0, 15))] == [8, 9, 10]
+    assert keys(h.snapshot("L1", 0, 0, 9999)) == keys(h.snapshot("L1", 0, 0, 60))
+    assert h.snapshot("L1", 0, 0, 0) == [] and h.snapshot("L2") == []
+    print("ok: cursor, 15/60 s windows, clamp to 60 s and session filter")
 
-    # timing: a reconnect storm
-    reset()
-    for i in range(1, 81):                                # about 60 s of finals
-        final(i)
+    # revision watermark: newer only, finals are terminal
+    r = s.CaptionRevisionState()
+    def upd(seg, rev, fin=False, **kw):
+        m = {"type": "CAPTION_UPDATE", "session": "L1", "segment": seg,
+             "revision": rev, "source_ts": 1.0, "final": fin, "text": "t"}
+        m.update(kw)
+        return r.accept(m, "L1")
+    assert upd(1, 1) and upd(1, 2) and not upd(1, 2) and not upd(1, 1)
+    assert upd(1, 3, True) and not upd(1, 4)              # nothing after a final
+    assert upd(2, 1) and not upd(1, 5, True)              # no going back
+    assert not upd(3, True) and not upd(3, 1, text=None) and not upd(3, 1, session="L2")
+    assert upd(3, 1, extra="ignored")
+    print("ok: revision watermark rejects stale, duplicate, post-final and malformed updates")
+
+    # timing: a reconnect storm against about 60 s of finals
+    clock = Clock()
+    h = s.FinalizedHistory(clock=clock)
+    for i in range(1, 81):
+        h.record(final(i, clock.now - 60 + i * 0.75))
     n = 5000
     t0 = time.perf_counter()
     for k in range(n):
-        s.build_history({"last_segment": 40 + (k % 10), "last_revision": 3, "history_seconds": 60})
+        h.snapshot("L1", 40 + (k % 10), 3, 60)
     ms = (time.perf_counter() - t0) * 1000
-    print(f"info: {n} HISTORY builds took {ms:.0f} ms ({ms / n * 1000:.1f} us each)")
+    print(f"info: {n} HISTORY snapshots took {ms:.0f} ms ({ms / n * 1000:.1f} us each)")
 
 
 if __name__ == "__main__":
