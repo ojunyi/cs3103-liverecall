@@ -2,24 +2,25 @@
 
 ## Tools used
 
-List the generative-AI/coding tools used by the team and what each was used for.
 - **Claude (Anthropic; Claude Code / claude.ai sessions, Claude Sonnet 5.5)**, used for:
   - Designing and drafting the server-side history for requirements 5 and 6 (history half) in `solution_server.py`.
-  - Drafting `test_history.py` (protocol tests plus unit tests for the history bounds and cache - basically a testcase).
+  - Drafting `test_history.py` (development protocol and history tests; this file is not in the current submission tree).
   - Drafting the client changes in `client/app.js` for requirements 3 and 5.
+
+- **OpenAI Codex**, used for:
+  - Drafting revision validation, bounded finalized history, per-client queues, semantic backpressure, and browser revision, recall, and reconnect behavior.
+  - Reviewing separate agent worktrees, integrating their changes, adapting test interfaces, and running protocol tests, browser checks, and measurements during development.
+  - Preparing black-box protocol tests, a public-run provenance wrapper, and setup and experiment guidance. The supplied measurement programs were preserved.
 
 ## One useful suggestion
 
-Describe one suggestion that materially helped the project and how you verified it.
-
-Claude suggested keeping the finalized-caption history in parallel sorted lists and using `bisect` to find the start of the requested window, instead of scanning a list or re-encoding JSON for every client. The history is bounded by age (90 s) and by count (20 000), and ready-to-send HISTORY payloads are cached and keyed by the client's state, so many clients reconnecting together cost one build each.
-
-How we verified it: `python test_history.py` checks finals only, oldest to newest, resume after `(last_segment, last_revision)`, clamping of `history_seconds`, junk-tolerant hello messages, the count and age bounds, the cache bound, and a mid-stream join with no gaps or duplicates. We also ran `run_demo.py` (late join: 100% completeness, no duplicates or stale finals) and checked in the browser that `ws.close()` reconnects and the missed finals appear once each, with no gaps.
+Codex suggested separating revision validation from final-caption history. `CaptionRevisionState` keeps a small, lasting watermark to reject stale updates, while `FinalizedHistory` keeps recent finals for replay. Expiring a caption from recovery history therefore does not make an old revision acceptable again. We verified the separation in the integrated server: accepted updates pass through `REVISION_STATE.accept` before finals enter `HISTORY.record`, and pruning history does not reset the revision watermark.
 
 ## One suggestion that was wrong, inefficient, or required modification
 
-Include a short generated suggestion/code fragment or precise description, explain the problem, and describe your correction.
+The original Codex lag probe used the same 0.25-second pong timeout for every client. This could classify a client with steady network delay as slow even when it was keeping up. We thus modified the timeout to be a client's best measured RTT plus a margin (`LAG_THRESHOLD_SECONDS`, later raised to 1 second from 0.25), using an initial estimate until an RTT is available. We also tried a shorter 10-second slow-mode hold that doubled after repeated lag, but the recorded T3 slow-client fresh ratio fell from about 36% to 7% as socket backlog repeatedly rebuilt. We kept `LAG_HOLD_SECONDS` at 60 seconds. That measurement concerns caption freshness, not final-caption completeness.
 
 ## Responsibility statement
 
 We understand that the team remains responsible for the submitted code, experimental results, and claims, and that every member may be asked to explain or modify relevant code during the viva.
+Before submission, all team members must review this declaration and add any missing tool use or critical evaluations from their own work.

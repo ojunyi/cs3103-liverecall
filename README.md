@@ -82,10 +82,3 @@ history window cannot be recovered by this bounded design.
 
 All server logic is in `solution_server.py`. The required entry point is
 `python solution_server.py --port <integer>`.
-
-## Before submission
-
-Complete `AI_USAGE.md` and `CONTRIBUTIONS.md` with the team's actual details,
-include a 4–5 page `report.pdf` and the separate 5–7 minute demo video, and run
-`python submission_check.py --final`. Development measurements made under WSL
-do not replace the required final Ubuntu/netem runs.
