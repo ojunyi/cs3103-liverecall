@@ -87,7 +87,7 @@ CLIENT_SEND_TIMEOUT_SECONDS = 10  # also bounds a stalled HISTORY or final send
 LAG_PROBE_INTERVAL_SECONDS = 0.5
 # Lag is a pong slower than this client's best round trip by this margin, so a
 # steady network delay (e.g. netem) is not mistaken for a slow reader.
-LAG_THRESHOLD_SECONDS = 0.25
+LAG_THRESHOLD_SECONDS = 1.0
 LAG_INITIAL_RTT_SECONDS = 1.0  # assumed best round trip until one is measured
 # Favor final delivery for sustained slow readers. A brief impairment may
 # therefore suppress some provisional updates until this hold expires.
