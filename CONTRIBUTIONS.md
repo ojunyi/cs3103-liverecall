@@ -1,12 +1,11 @@
-# Team contributions (requires team completion)
+# Team Contributions
 
-Actual member names, student IDs and agreed percentages were not available during preparation. Complete this table with the team; do not submit placeholders or infer contribution shares from commit counts.
-
-| Member / student ID | Responsibilities | Experiments / report sections | Agreed contribution % |
+| Member | Main responsibilities | Experiments/report sections | Agreed contribution % |
 |---|---|---|---:|
-| To be completed | | | |
-| To be completed | | | |
-| To be completed | | | |
-| To be completed | | | |
+| Ong Jun Yi |  |  | 33%  |
+| Julian Lim |  |  | 33% |
+| Xia Wen Hao |  |  | 33% |
 
-The agreed percentages must total 100%. Record shared integration work explicitly. Supporting work includes protocol checks, public-run provenance tooling, recovery analysis, and setup/experiment documentation; the team must attribute review and ownership to the actual members.
+Total contribution should be 100%.
+
+Add brief notes on major shared/integration work if useful. Git history is supporting evidence, not a substitute for this statement.

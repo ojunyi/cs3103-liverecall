@@ -1,26 +1,26 @@
-# AI / coding-assistant usage (integration draft)
+# AI / Coding-Assistant Usage
 
-This declaration covers this integration/testing work only. The team must add the other members' tools and work before submission.
+## Tools used
 
-## Tools and tasks
+- **Claude (Anthropic; Claude Code / claude.ai sessions, Claude Sonnet 5.5)**, used for:
+  - Designing and drafting the server-side history for requirements 5 and 6 (history half) in `solution_server.py`.
+  - Drafting `test_history.py` (development protocol and history tests; this file is not in the current submission tree).
+  - Drafting the client changes in `client/app.js` for requirements 3 and 5.
 
-OpenAI Codex agents were used for revision validation, bounded finalized history, per-client queues, semantic backpressure, browser revision/recall/reconnect behavior, and verification/documentation. The integration coordinator reviewed their separate worktrees and tests, reconciled changes in stages, adapted test interfaces, exercised real browsers with the supplied deterministic source, and measured the combined code. Codex also prepared the black-box protocol tests, public-run provenance wrapper and setup/experiment guidance. The supplied measurement programs were preserved. pypdf extracted the assignment PDF for inspection; it is a development-only tool.
+- **OpenAI Codex**, used for:
+  - Drafting revision validation, bounded finalized history, per-client queues, semantic backpressure, and browser revision, recall, and reconnect behavior.
+  - Reviewing separate agent worktrees, integrating their changes, adapting test interfaces, and running protocol tests, browser checks, and measurements during development.
+  - Preparing black-box protocol tests, a public-run provenance wrapper, and setup and experiment guidance. The supplied measurement programs were preserved.
 
-## Useful suggestion and verification
+## One useful suggestion
 
-Test recovery contents as well as response speed: a fast empty HISTORY does not establish correctness. The baseline tests directly compared recovered finalized segment/revision IDs against known source events. The starter returned empty HISTORY and failed these assertions. The combined implementation passed revision/history/queue/policy and black-box checks during development; the browser recovered twelve missed finals using its real finalized cursor. The team must run and document final measurements for the submitted code.
+Codex suggested separating revision validation from final-caption history. `CaptionRevisionState` keeps a small, lasting watermark to reject stale updates, while `FinalizedHistory` keeps recent finals for replay. Expiring a caption from recovery history therefore does not make an old revision acceptable again. We verified the separation in the integrated server: accepted updates pass through `REVISION_STATE.accept` before finals enter `HISTORY.record`, and pruning history does not reset the revision watermark.
 
-## Suggestion requiring modification
+## One suggestion that was wrong, inefficient, or required modification
 
-The first provenance-wrapper version used `git rev-parse HEAD` unconditionally. Linux Git in WSL could not read this Windows-created worktree's absolute `C:/...` Git pointer, so that version stopped before running any experiment. It was changed to record the Git metadata error explicitly and retain content hashes rather than fabricate a commit. Host Git identifies the baseline as `5ccaac8`; final experiments should retain native Ubuntu checkout metadata. The corrected wrapper launched the baseline T4 experiment. This is an actual observed limitation and correction, not a hypothetical rejected suggestion.
+The original Codex lag probe used the same 0.25-second pong timeout for every client. This could classify a client with steady network delay as slow even when it was keeping up. We thus modified the timeout to be a client's best measured RTT plus a margin (`LAG_THRESHOLD_SECONDS`, later raised to 1 second from 0.25), using an initial estimate until an RTT is available. We also tried a shorter 10-second slow-mode hold that doubled after repeated lag, but the recorded T3 slow-client fresh ratio fell from about 36% to 7% as socket backlog repeatedly rebuilt. We kept `LAG_HOLD_SECONDS` at 60 seconds. That measurement concerns caption freshness, not final-caption completeness.
 
-A second integration correction replaced generated tests using Python 3.11-only
-`asyncio.timeout` with bounded Python 3.10-compatible waits. Revision tests also
-needed adapting from historical `store_final`/`broadcast_naively` helpers to the
-combined `HISTORY.record`/`broadcast` interface. Copying an entire agent server
-would have overwritten another component; the coordinator integrated the relevant
-class and handler edits instead.
+## Responsibility statement
 
-## Team responsibility
-
-Before submission, all team members must review this declaration and add missing tool use and critical evaluations from their own work. The team remains responsible for submitted code, experimental results and claims, and every member may be asked to explain or modify relevant code during the viva.
+We understand that the team remains responsible for the submitted code, experimental results, and claims, and that every member may be asked to explain or modify relevant code during the viva.
+Before submission, all team members must review this declaration and add any missing tool use or critical evaluations from their own work.
