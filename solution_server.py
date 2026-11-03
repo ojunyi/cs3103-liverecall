@@ -97,6 +97,8 @@ LAG_INITIAL_RTT_SECONDS = 1.0  # assumed best round trip until one is measured
 # from ~36% to ~7%).
 LAG_HOLD_SECONDS = 60
 
+# Sustained congestion: a pong this far over the best RTT, on this many probes in a row,
+# also triggers slow mode, so a shared link that is slightly too small sheds provisionals early.
 LAG_SUSTAINED_EXCESS_SECONDS = 0.4  # pong this far over best RTT counts as a lag sample
 LAG_SUSTAINED_PROBES = 3  # consecutive lag samples before slow mode
 
