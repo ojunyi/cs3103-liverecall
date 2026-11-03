@@ -97,6 +97,9 @@ LAG_INITIAL_RTT_SECONDS = 1.0  # assumed best round trip until one is measured
 # from ~36% to ~7%).
 LAG_HOLD_SECONDS = 60
 
+LAG_SUSTAINED_EXCESS_SECONDS = 0.4  # pong this far over best RTT counts as a lag sample
+LAG_SUSTAINED_PROBES = 3  # consecutive lag samples before slow mode
+
 
 @dataclass
 class ClientState:
@@ -110,6 +113,7 @@ class ClientState:
     slow_until: float = 0
     best_rtt: float | None = None
     held_provisionals: dict[tuple[str, int], str | bytes] = field(default_factory=dict)
+    lag_streak: int = 0
 
     def lagging(self) -> bool:
         return asyncio.get_running_loop().time() < self.slow_until
@@ -169,8 +173,11 @@ class ClientState:
                     return
             rtt = loop.time() - sent
             self.best_rtt = rtt if self.best_rtt is None else min(self.best_rtt, rtt)
-            if rtt - self.best_rtt > LAG_THRESHOLD_SECONDS:
+            excess = rtt - self.best_rtt
+            self.lag_streak = self.lag_streak + 1 if excess > LAG_SUSTAINED_EXCESS_SECONDS else 0
+            if excess > LAG_THRESHOLD_SECONDS or self.lag_streak >= LAG_SUSTAINED_PROBES:
                 self.slow_until = loop.time() + LAG_HOLD_SECONDS
+                self.lag_streak = 0
             self.flush_held()
 
     def evict(self, reason: str) -> None:
