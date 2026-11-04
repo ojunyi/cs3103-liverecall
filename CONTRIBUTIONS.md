@@ -1,11 +1,9 @@
 # Team Contributions
 
 | Member | Main responsibilities | Experiments/report sections | Agreed contribution % |
-|---|---|---|---:|
-| Ong Jun Yi |  |  | 33%  |
-| Julian Lim |  |  | 33% |
-| Xia Wen Hao |  |  | 33% |
+| --- | --- | --- | ---: |
+| Ong Jun Yi | Initial Design of LiveRecall | Public Experiments, Analysis, Comparison, Limitations and Future Work | 33.3% |
+| Julian Lim | Version 1 of LiveRecall | Revision Handling, Recovery, Backpressure and Overload Handling | 33.3% |
+| Xia Wen Hao | Final version of LiveRecall | Server and Client Architecture, vet checking and editting of report | 33.3% |
 
-Total contribution should be 100%.
-
-Add brief notes on major shared/integration work if useful. Git history is supporting evidence, not a substitute for this statement.
+For the shared contribution, we iterated on one another's inplementation and conducted dissions on how to improve on each other's implementation. We also tested each other's implementation and came up with the final iteration together.
