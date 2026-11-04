@@ -44,6 +44,9 @@ replacement, the 15/30/60 s recall options, a client reconnecting after a simula
 network drop, a late-joining browser, and a slow client falling behind while the
 others stay fresh.
 
+If the video doesn't load on GitHub, view it on Google Drive instead:
+[Video](https://drive.google.com/file/d/1N4YQciID9JAd9pTKbo161CQx-QpiSXRH/view?usp=sharing)
+
 ## Deterministic browser demo
 
 In three terminals, run:
