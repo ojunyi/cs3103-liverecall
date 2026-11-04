@@ -77,6 +77,7 @@ function render() {
   }
   const ordered = [...captions.values()].sort((a, b) => a.segment - b.segment);
   const followLive = liveEl.scrollHeight - liveEl.scrollTop - liveEl.clientHeight < 48;
+  const followRecall = recallEl.scrollHeight - recallEl.scrollTop - recallEl.clientHeight < 48;
   for (const [segment, row] of liveRows) {
     if (!captions.has(segment)) {
       row.remove();
@@ -104,6 +105,7 @@ function render() {
   recallTitleEl.textContent = `Previous ${recallSeconds} seconds`;
   recallEl.replaceChildren(...recalled.map(captionRow));
   if (!recalled.length) recallEl.textContent = "No finalized captions in this window yet.";
+  if (followRecall) recallEl.scrollTop = recallEl.scrollHeight;
 }
 function scheduleReconnect() {
   if (retryTimer) return;
@@ -170,8 +172,39 @@ for (const button of document.querySelectorAll("button[data-seconds]")) {
       option.setAttribute("aria-pressed", String(option === button));
     }
     render();
+    recallEl.scrollTop = recallEl.scrollHeight;
   });
 }
+// Demo control: drop this tab's socket and let the normal reconnect path resume it.
+const DROP_SECONDS = 7;
+document.getElementById("drop")?.addEventListener("click", event => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  const socket = ws;
+  ws = undefined; // the existing ws !== socket guards now ignore this socket
+  socket.close(4000, "simulated drop");
+  retryDelay = DROP_SECONDS * 1000;
+  scheduleReconnect();
+  let remaining = DROP_SECONDS;
+  const showCountdown = () => {
+    statusEl.textContent = `Simulated network drop · reconnecting in ${remaining} s`;
+  };
+  showCountdown();
+  const countdown = setInterval(() => {
+    remaining -= 1;
+    // At zero the reconnect timer takes over and shows "Connecting…".
+    if (remaining <= 0) clearInterval(countdown);
+    else showCountdown();
+  }, 1000);
+  // Stay disabled until reconnected: clicking does nothing without an open socket.
+  const waitForOpen = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      clearInterval(waitForOpen);
+      button.disabled = false;
+    }
+  }, 200);
+});
 render();
 setInterval(render, 1000);
 connect();
