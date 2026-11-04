@@ -4,7 +4,7 @@
 
 - Ong Jun Yi / A0301890J
 - Julian Lim / A0292058Y
-- Wenhao / A0252901M
+- Xia Wenhao / A0252901M
 
 LiveRecall sends revision-based lecture captions from the supplied deterministic
 source through a WebSocket server to browser clients. The browser replaces older
@@ -13,11 +13,16 @@ its latest finalized cursor.
 
 ## Ubuntu setup
 
-Run these commands from the repository root on Ubuntu 25.04.
+Tested on Ubuntu 25.04.
 
-1. Clone the repository: `git clone https://github.com/ojunyi/cs3103-liverecall.git`
+1. Clone the repository and enter it:
 
-2. Install the necessary dependencies:
+```bash
+git clone https://github.com/ojunyi/cs3103-liverecall.git
+cd cs3103-liverecall
+```
+
+2. Install the necessary dependencies from the repository root:
 
 ```bash
 sudo apt update
@@ -48,6 +53,11 @@ source. Observe provisional text being replaced by a final, use the default
 watch it reconnect, then open a late-joining browser. Recall uses local final
 captions; reconnect/late join uses the server's recent `HISTORY` response.
 
+Restart `solution_server.py` before running `caption_source.py` again. The server
+keeps its revision state for the whole lecture and the source restarts at segment
+1, so a second source run against the same server is rejected and clients receive
+no captions.
+
 ## Public deterministic tests
 
 You may run the following tests. Do not edit the supplied
@@ -72,14 +82,14 @@ For T5 and T6, use a full Ubuntu VM with working `tc/netem` and run:
 
 ```bash
 ## T5 - Network Impairment
-sudo ./network_profiles/delay_loss.sh lo
+sudo bash network_profiles/delay_loss.sh lo
 python run_demo.py --clients 100 --duration 60 --runs 3
-sudo ./network_profiles/reset.sh lo
+sudo bash network_profiles/reset.sh lo
 
 ## T6 - T3 (Slow Clients) + T5 (Network Impairment)
-sudo ./network_profiles/delay_loss.sh lo
+sudo bash network_profiles/delay_loss.sh lo
 python run_demo.py --clients 100 --duration 60 --runs 3 --slow-percent 20 --slow-ms 500
-sudo ./network_profiles/reset.sh lo
+sudo bash network_profiles/reset.sh lo
 ```
 
 ## Design notes
