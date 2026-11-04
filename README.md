@@ -37,6 +37,13 @@ The mandatory server has no cloud, database, or ASR dependency. Python 3.10+
 and the WebSocket package in `requirements.txt` are sufficient. Activate the
 virtual environment in each new terminal.
 
+## Demo video
+
+[Watch the demo video](./Demo.mp4) (about 3 min). It shows: provisional-to-final
+replacement, the 15/30/60 s recall options, a client reconnecting after a simulated
+network drop, a late-joining browser, and a slow client falling behind while the
+others stay fresh.
+
 ## Deterministic browser demo
 
 In three terminals, run:
