@@ -5,11 +5,18 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>LiveRecall</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #172234; background: #f7f9fc; }
+    /* The page never scrolls: rows above each caption box size to content, and the two 1fr rows split the rest equally. */
+    html { height: 100%; overflow: hidden; }
+    body { font-family: system-ui, sans-serif; box-sizing: border-box; height: 100vh; height: 100dvh; margin: 0; padding: 1rem clamp(1rem, 3vw, 2rem); overflow: hidden; color: #172234; background: #f7f9fc;
+      display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto auto minmax(0, 1fr); }
+    h1 { margin: 0; font-size: 1.6rem; }
+    body > p { margin: .25rem 0 0; }
     #status { font-weight: 700; }
-    section { margin: 1.5rem 0; }
-    h2 { font-size: 1.2rem; }
-    #live, #recall { background: white; min-height: 6rem; border: 1px solid #bbc7d7; border-radius: .5rem; padding: 1rem; overflow-y: auto; max-height: 24rem; overflow-wrap: anywhere; }
+    section { display: grid; grid-template-rows: subgrid; min-height: 0; }
+    section:first-of-type { grid-row: span 3; }
+    section:last-of-type { grid-row: span 4; }
+    h2 { font-size: 1.2rem; margin: .75rem 0 .25rem; }
+    #live, #recall { box-sizing: border-box; background: white; min-height: 0; border: 1px solid #bbc7d7; border-radius: .5rem; padding: 1rem; overflow-y: auto; overflow-wrap: anywhere; }
     #live.empty::before { content: "Waiting for captions…"; color: #526176; }
     .caption { padding: .6rem 0; border-bottom: 1px solid #e0e6ef; }
     .caption:last-child { border-bottom: 0; }
@@ -20,7 +27,7 @@
     button[aria-pressed="true"] { background: #174ea6; border-color: #174ea6; color: white; }
     button:disabled { background: #e4e8ee; border-color: #c5cdd8; color: #7a8699; cursor: not-allowed; }
     button:focus-visible { outline: 3px solid #e39b19; outline-offset: 2px; }
-    .hint { font-size: .9rem; color: #526176; }
+    .hint { font-size: .9rem; color: #526176; margin: .25rem 0 .5rem; }
   </style>
 </head>
 <body>

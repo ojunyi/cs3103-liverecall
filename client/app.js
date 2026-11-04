@@ -77,6 +77,7 @@ function render() {
   }
   const ordered = [...captions.values()].sort((a, b) => a.segment - b.segment);
   const followLive = liveEl.scrollHeight - liveEl.scrollTop - liveEl.clientHeight < 48;
+  const followRecall = recallEl.scrollHeight - recallEl.scrollTop - recallEl.clientHeight < 48;
   for (const [segment, row] of liveRows) {
     if (!captions.has(segment)) {
       row.remove();
@@ -104,6 +105,7 @@ function render() {
   recallTitleEl.textContent = `Previous ${recallSeconds} seconds`;
   recallEl.replaceChildren(...recalled.map(captionRow));
   if (!recalled.length) recallEl.textContent = "No finalized captions in this window yet.";
+  if (followRecall) recallEl.scrollTop = recallEl.scrollHeight;
 }
 function scheduleReconnect() {
   if (retryTimer) return;
@@ -170,6 +172,7 @@ for (const button of document.querySelectorAll("button[data-seconds]")) {
       option.setAttribute("aria-pressed", String(option === button));
     }
     render();
+    recallEl.scrollTop = recallEl.scrollHeight;
   });
 }
 // Demo control: drop this tab's socket and let the normal reconnect path resume it.
