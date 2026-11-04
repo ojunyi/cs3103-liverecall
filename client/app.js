@@ -174,14 +174,33 @@ for (const button of document.querySelectorAll("button[data-seconds]")) {
 }
 // Demo control: drop this tab's socket and let the normal reconnect path resume it.
 const DROP_SECONDS = 7;
-document.getElementById("drop")?.addEventListener("click", () => {
+document.getElementById("drop")?.addEventListener("click", event => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const button = event.currentTarget;
+  button.disabled = true;
   const socket = ws;
   ws = undefined; // the existing ws !== socket guards now ignore this socket
   socket.close(4000, "simulated drop");
   retryDelay = DROP_SECONDS * 1000;
   scheduleReconnect();
-  statusEl.textContent = `Simulated network drop · reconnecting in ${DROP_SECONDS} s`;
+  let remaining = DROP_SECONDS;
+  const showCountdown = () => {
+    statusEl.textContent = `Simulated network drop · reconnecting in ${remaining} s`;
+  };
+  showCountdown();
+  const countdown = setInterval(() => {
+    remaining -= 1;
+    // At zero the reconnect timer takes over and shows "Connecting…".
+    if (remaining <= 0) clearInterval(countdown);
+    else showCountdown();
+  }, 1000);
+  // Stay disabled until reconnected: clicking does nothing without an open socket.
+  const waitForOpen = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      clearInterval(waitForOpen);
+      button.disabled = false;
+    }
+  }, 200);
 });
 render();
 setInterval(render, 1000);
