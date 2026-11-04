@@ -58,7 +58,7 @@ function updateRow(row, caption) {
   row.dataset.revision = String(caption.revision);
   const label = document.createElement("span");
   label.className = "caption-meta";
-  label.textContent = `${caption.final ? "Final" : "Provisional"} · Segment ${caption.segment} · Rev ${caption.revision}`;
+  label.textContent = `Segment ${caption.segment} · Rev ${caption.revision} · ${caption.final ? "Final" : "Provisional"}`;
   const text = document.createElement("span");
   text.className = "caption-text";
   text.textContent = caption.text;
@@ -75,8 +75,8 @@ function render() {
     const timestamp = caption.final ? caption.source_ts : caption.receivedAt;
     if (timestamp < now - RETENTION_SECONDS) captions.delete(segment);
   }
-  const ordered = [...captions.values()].sort((a, b) => a.segment - b.segment);
-  const followLive = liveEl.scrollHeight - liveEl.scrollTop - liveEl.clientHeight < 48;
+  const ordered = [...captions.values()].sort((a, b) => b.segment - a.segment);
+  const followLive = liveEl.scrollTop < 48;
   const followRecall = recallEl.scrollHeight - recallEl.scrollTop - recallEl.clientHeight < 48;
   for (const [segment, row] of liveRows) {
     if (!captions.has(segment)) {
@@ -99,13 +99,13 @@ function render() {
     previousRow = row;
   }
   liveEl.classList.toggle("empty", ordered.length === 0);
-  if (followLive) liveEl.scrollTop = liveEl.scrollHeight;
+  // if (followLive) liveEl.scrollTop = 0;
   const recalled = ordered.filter(caption => caption.final &&
     caption.source_ts >= now - recallSeconds && caption.source_ts <= now);
   recallTitleEl.textContent = `Previous ${recallSeconds} seconds`;
   recallEl.replaceChildren(...recalled.map(captionRow));
   if (!recalled.length) recallEl.textContent = "No finalized captions in this window yet.";
-  if (followRecall) recallEl.scrollTop = recallEl.scrollHeight;
+  // if (followRecall) recallEl.scrollTop = 0;
 }
 function scheduleReconnect() {
   if (retryTimer) return;
