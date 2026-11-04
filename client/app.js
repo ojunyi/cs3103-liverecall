@@ -172,6 +172,17 @@ for (const button of document.querySelectorAll("button[data-seconds]")) {
     render();
   });
 }
+// Demo control: drop this tab's socket and let the normal reconnect path resume it.
+const DROP_SECONDS = 7;
+document.getElementById("drop")?.addEventListener("click", () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const socket = ws;
+  ws = undefined; // the existing ws !== socket guards now ignore this socket
+  socket.close(4000, "simulated drop");
+  retryDelay = DROP_SECONDS * 1000;
+  scheduleReconnect();
+  statusEl.textContent = `Simulated network drop · reconnecting in ${DROP_SECONDS} s`;
+});
 render();
 setInterval(render, 1000);
 connect();
