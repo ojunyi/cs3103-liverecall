@@ -102,7 +102,6 @@ function render() {
   // if (followLive) liveEl.scrollTop = 0;
   const recalled = ordered.filter(caption => caption.final &&
     caption.source_ts >= now - recallSeconds && caption.source_ts <= now);
-  recallTitleEl.textContent = `Previous ${recallSeconds} seconds`;
   recallEl.replaceChildren(...recalled.map(captionRow));
   if (!recalled.length) recallEl.textContent = "No finalized captions in this window yet.";
   // if (followRecall) recallEl.scrollTop = 0;
